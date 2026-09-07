@@ -18,6 +18,7 @@ Two of these are human actions, per machine, that no script can do for you.
 | **Orchestration** | an experimental feature: enable it in Orca under Settings > Experimental. `preflight.sh` probes it and stops if it is unreachable |
 | **Agent folder trust** | your agent CLI stops on its folder-trust dialog the first time it opens a path it does not trust, and the dispatch then fails with `agent_prompt_stalled` instead of doing anything. Trust covers nested paths, so opening the target repo once and accepting is enough: it covers the worktrees Orca creates under `.orca/workspaces/` |
 | Nested worker depth | leave it at the default of `1`. The design does not depend on raising it |
+| **A decided stack** | `office.config.json` needs `commands.install/build/test/lint` and per-Role write paths. On an existing codebase the installer reads them from the repo; on a greenfield repo they must come from a spec that already fixes them. See [Greenfield repos](#greenfield-repos) |
 
 ## Install
 
@@ -31,6 +32,7 @@ The flow is six steps, and only step 4 writes anything:
 
 1. **Preflight** - environment, orchestration reachability, installed-skill inventory, existing office detection.
 2. **Mandate** - one open question: what does this office produce, and what does "done" mean?
+   Before this question, the installer checks that the stack is already decided - see below.
 3. **Roster proposal** - 3-5 Roles, drawn only from skills that are actually installed, with what was excluded and why, and the cost of a cycle in dispatches per day. Corrections in prose until you approve.
 4. **Scaffold** - writes `office.config.json`, then generates everything from it.
 5. **Automation** - registers the Coordinator's schedule, always **disabled**. Enabling it is yours.
@@ -43,6 +45,16 @@ skills/the-office/scripts/preflight.sh  /path/to/repo   # validate, refuse to pr
 skills/the-office/scripts/scaffold.sh   /path/to/repo   # generate; idempotent
 skills/the-office/scripts/automation.sh /path/to/repo   # register the schedule, disabled
 ```
+
+## Greenfield repos
+
+**The installer never decides your stack.** It will not ask you, in passing, which language or framework to use: that is an architectural decision, and an answer typed in one line between two installer steps is the worst version of it.
+
+- **Existing codebase** - the stack is read from the repo. Run `/the-office` and go.
+- **Empty repo with a spec** - fine. A `SPEC.md`, an ADR or a tech-design doc that fixes the language, framework, layout and test runner is enough for an office to build the project from zero.
+- **Empty repo with an idea** - stop. A `CONCEPT.md`, a pitch, or a README of intentions is not a spec. Write the spec first, then install the office.
+
+If the stack is not fixed anywhere, the installer says so and stops instead of guessing.
 
 ## What lands in the target repo
 
@@ -68,6 +80,7 @@ Regeneration is safe: everything between `<!-- office:keep -->` and `<!-- /offic
   "mandate": "Keep the public API documented, tested and typed; done means a green suite and no undocumented endpoint.",
   "cadence": "daily",
   "backlog": "tracker",
+  "tracker_skills": ["to-tickets", "triage"],
   "merge_authority": "human",
   "default_branch": "main",
   "integration_branch": "office/integration",
@@ -106,7 +119,7 @@ Full field reference in [SPEC.md §3](./SPEC.md). The three things worth knowing
 
 This is the only real failure mode of the design, so it is enforced rather than advised. `preflight.sh` computes every pairwise conflict across all Roles and the Coordinator and refuses to scaffold when one exists. Two paths conflict when they are equal, or when one is a directory prefix of the other.
 
-The corollary catches people out: the most contested files belong to nobody in particular. Manifests, lockfiles, migrations, CI config and changelogs go in `coordinator.writes`. A Role that needs a new dependency reports it as a **Finding**; the Coordinator applies it. The same applies to the issue tracker when `backlog` is `tracker`: at most one Role may hold a tracker-writing skill.
+The corollary catches people out: the most contested files belong to nobody in particular. Manifests, lockfiles, migrations, CI config and changelogs go in `coordinator.writes`. A Role that needs a new dependency reports it as a **Finding**; the Coordinator applies it. The same applies to the issue tracker when `backlog` is `tracker`: list the installed skills that write to it in `tracker_skills`, and at most one Role may hold one. The list is yours - the office knows no particular skill set, and an absent or empty list turns the check off.
 
 ## The cycle
 
@@ -154,7 +167,7 @@ skills/the-office/tests/e2e.sh
 shellcheck -e SC2016,SC2015 skills/the-office/scripts/*.sh skills/the-office/tests/e2e.sh
 ```
 
-46 assertions on a synthetic repo. The invariant worth testing by machine is determinism: a second `scaffold.sh` run must be byte-identical, keep blocks must survive, and the board files must not be touched. The suite sets `OFFICE_SKIP_ORCA=1` so it runs without an Orca runtime; never set that when installing a real office.
+49 assertions on a synthetic repo. The invariant worth testing by machine is determinism: a second `scaffold.sh` run must be byte-identical, keep blocks must survive, and the board files must not be touched. The suite sets `OFFICE_SKIP_ORCA=1` so it runs without an Orca runtime; never set that when installing a real office.
 
 ## When something goes wrong
 

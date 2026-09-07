@@ -217,6 +217,34 @@ PY
   && bad "preflight accepted backlog=tracker with no tracker config" \
   || ok "preflight refuses backlog=tracker without docs/agents/issue-tracker.md"
 
+# --- 10b. tracker_skills gates the tracker write path ----------------------
+
+mkdir -p "$REPO/docs/agents"; printf 'local files under .scratch/\n' > "$REPO/docs/agents/issue-tracker.md"
+write_config
+python3 - "$REPO/office.config.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["backlog"] = "tracker"
+json.dump(cfg, open(p, "w"), indent=2)
+PY
+"$ROOT/scripts/preflight.sh" "$REPO" >/dev/null 2>&1 \
+  && ok "preflight skips the tracker-writer check when tracker_skills is absent" \
+  || bad "preflight refused a tracker office with no tracker_skills"
+
+python3 - "$REPO/office.config.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["tracker_skills"] = ["tdd"]   # both roles declare it
+json.dump(cfg, open(p, "w"), indent=2)
+PY
+"$ROOT/scripts/preflight.sh" "$REPO" >/dev/null 2>&1 \
+  && bad "preflight accepted two Roles holding a tracker-writing skill" \
+  || ok "preflight refuses two Roles holding a skill listed in tracker_skills"
+
+rm -rf "$REPO/docs"
+
 # --- 11. check-writes gates a delivery -------------------------------------
 
 write_config

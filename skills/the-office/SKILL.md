@@ -27,6 +27,14 @@ It reports the environment, whether orchestration is reachable, the installed sk
 
 An existing `office.config.json` makes this run an **update**: read the config, show the roster, ask only what changes. Adding a Role after six months is one question.
 
+### Precondition: a codebase, or a spec
+
+The stack must already be decided. `commands.install/build/test/lint` and every Role's `writes` path presuppose a language, a framework, a layout and a test runner.
+
+On a repo with code, read them from the repo. On a greenfield repo, take them from a document that already fixes them: a spec, an ADR, a tech design. A concept, a pitch or a README of intentions fixes nothing.
+
+Choosing a stack is an architectural decision with its own process, so when nothing fixes it, stop and say so - the user writes the spec first, then runs the install again. A spec with no code yet is a fine starting point: an office can build a project from zero.
+
 ### 2. Mandate
 
 Ask one open question: **what does this office produce, and what does "done" mean?** Ask about cadence only if the answer leaves it open.
@@ -38,7 +46,7 @@ Propose 3-5 Roles in compact blocks: persona, one-sentence mandate, `reads`, `wr
 - Draw `skills` from the inventory preflight found, and only from there.
 - `writes` is the part that deserves discussion. Exactly one Role writes any given path.
 - Shared project files - manifests, lockfiles, migrations, CI config, changelogs - belong to `coordinator.writes`.
-- One Role at most holds a tracker-writing skill (`to-tickets`, `to-spec`, `triage`).
+- When `backlog` is `tracker`, the tracker is a write path too: name the installed skills that write to it in `tracker_skills`, and give them to one Role at most.
 - Price a cycle out loud: roles x cycles/day x ~1.5-2 for rework = dispatches/day.
 - Name the **merge pressure** the cadence creates. With no `integration_branch` the cycle refuses to dispatch while a delivery is unmerged, so an `hourly` office needs an hourly merger, and `on-demand` is the honest cadence for someone who wants merge authority whole. An `integration_branch` lets the Coordinator merge, so the user picks it explicitly.
 

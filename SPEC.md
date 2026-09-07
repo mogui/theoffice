@@ -10,6 +10,8 @@ The skill is an **installer, not a runtime**. It runs once (or again to update t
 
 An office is a repo, not an installation. Everything essential is reproducible from `office.config.json` by the scripts copied into `.office/scripts/`.
 
+The installer **never decides the stack**. `commands.*` and every `writes` path presuppose a language, a framework, a layout and a test runner; on a repo with code those are read from the repo, and on a greenfield repo they must already be fixed by a spec, an ADR or a tech-design doc. A concept or an idea is not one. When nothing fixes the stack, the run stops: choosing it is an architectural decision with its own process, not a question asked in passing between two installer steps.
+
 ## 2. Determinism contract
 
 Per [ADR 0001](./docs/adr/0001-config-is-the-only-scaffold-input.md):
@@ -32,6 +34,7 @@ At the repo root.
   "mandate": "Keep the public API documented, tested and typed; done means green suite and no undocumented endpoint.",
   "cadence": "on-demand",
   "backlog": "tracker",
+  "tracker_skills": ["to-tickets", "triage"],
   "merge_authority": "human",
   "default_branch": "main",
   "integration_branch": "office/integration",
@@ -70,6 +73,7 @@ At the repo root.
 | `mandate` | yes | One sentence: what the office produces and what done means. |
 | `cadence` | yes | `on-demand` \| `hourly` \| `daily`. Drives the automation trigger. |
 | `backlog` | yes | `tracker` \| `board`. See §5. |
+| `tracker_skills` | no | Names of installed skills that write to the tracker. Checked only when `backlog` is `tracker`; absent or empty disables the check. |
 | `merge_authority` | yes | Always `"human"` in schema 1. Present so a future value is a schema change, not a surprise. |
 | `default_branch` | no | Defaults to `main`. The branch only a human merges into. |
 | `integration_branch` | no | Absent, every delivery waits for a human merge. Present, the Coordinator lands gate-passed deliveries there and Workers branch from it. Must differ from `default_branch`. See §4b. |
@@ -99,7 +103,7 @@ Two write paths **conflict** when they are equal, or when one is a directory pre
 
 Shared project files (manifests, lockfiles, migrations, CI config, changelogs) belong to `coordinator.writes`. A Role that needs a dependency reports a Finding; the Coordinator applies it on `current`.
 
-The tracker, when `backlog` is `tracker`, is itself a write path: **at most one** Role may declare a tracker-writing skill (`to-tickets`, `to-spec`, `triage`). Preflight enforces this.
+The tracker, when `backlog` is `tracker`, is itself a write path: **at most one** Role may declare a skill listed in `tracker_skills`. Preflight enforces this, and skips the check when the list is absent or empty - the skill knows no particular skill set, so the names come from the config.
 
 ## 4b. Merge pressure
 

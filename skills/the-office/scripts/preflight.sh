@@ -6,7 +6,6 @@ set -euo pipefail
 
 REPO="${1:-$PWD}"
 CONFIG="$REPO/office.config.json"
-TRACKER_SKILLS="to-tickets to-spec triage"
 
 fail() { printf 'preflight: %s\n' "$1" >&2; exit 1; }
 note() { printf '  %s\n' "$1"; }
@@ -168,15 +167,20 @@ done < <(jq -r '.roles[] | .id as $i | .skills[]? | "\($i) \(.)"' "$CONFIG")
 
 # The tracker is a write path: at most one Role may write to it.
 if [ "$backlog" = "tracker" ]; then
-  writers=""
-  for skill in $TRACKER_SKILLS; do
-    while IFS= read -r id; do
-      [ -n "$id" ] && writers="$writers$id\n"
-    done < <(jq -r --arg s "$skill" '.roles[] | select(.skills[]? == $s) | .id' "$CONFIG")
-  done
-  count=$(printf '%b' "$writers" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
-  if [ "$count" -gt 1 ]; then
-    fail "more than one Role declares a tracker-writing skill ($TRACKER_SKILLS): $(printf '%b' "$writers" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+  tracker_skills=$(jq -r '.tracker_skills[]? ' "$CONFIG")
+  if [ -z "$tracker_skills" ]; then
+    note "backlog=tracker, tracker_skills empty: no tracker-writer check"
+  else
+    writers=""
+    for skill in $tracker_skills; do
+      while IFS= read -r id; do
+        [ -n "$id" ] && writers="$writers$id\n"
+      done < <(jq -r --arg s "$skill" '.roles[] | select(.skills[]? == $s) | .id' "$CONFIG")
+    done
+    count=$(printf '%b' "$writers" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
+    if [ "$count" -gt 1 ]; then
+      fail "more than one Role declares a tracker-writing skill ($(printf '%s' "$tracker_skills" | tr '\n' ' ')): $(printf '%b' "$writers" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+    fi
   fi
 fi
 
