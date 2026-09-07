@@ -42,6 +42,7 @@ Rules for the proposal:
 - Shared project files - manifests, lockfiles, migrations, CI config, changelogs - go in `coordinator.writes`, never to a Role.
 - At most one Role may hold a tracker-writing skill (`to-tickets`, `to-spec`, `triage`).
 - Show the cost of a cycle: roles x cycles/day x ~1.5-2 (re-dispatch for rework) = dispatches/day.
+- Say out loud what the cadence implies for merging. Without an `integration_branch` the cycle refuses to dispatch while any delivery is unmerged, so an `hourly` office needs an hourly merger. If the user does not want to be that, propose an `integration_branch`; if they want to hold merge authority absolutely, `on-demand` is the honest cadence. Do not set `integration_branch` silently: it lets the Coordinator merge, and that is the user's call.
 
 Take corrections in prose until the user approves. Do not write anything yet.
 
@@ -70,7 +71,8 @@ These belong in `OFFICE.md` and you must not contradict them:
 - The Coordinator is the only actor on `current`. Every Role runs in its own worktree; `--worktree current` is never an option for a Worker.
 - A Role that reports a Finding does not authorise anyone to edit those files. The fix is re-dispatched to the owning Role.
 - `worker-release` settles a Worker that reported. A Worker that exited silently is settled with `worker-abandon`, and its residual resources are a human's problem.
-- Merge authority is human.
+- A delivery is a branch, and a delivery that broke its write set never lands.
+- Merge authority over the default branch is human, always. An `integration_branch` moves where the Coordinator may merge, never whether a human merges.
 
 ## Tests
 

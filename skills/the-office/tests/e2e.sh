@@ -92,10 +92,17 @@ for f in \
   .office/scripts/scaffold.sh \
   .office/scripts/preflight.sh \
   .office/scripts/check-writes.sh \
-  .office/templates/role.SKILL.md.tmpl
+  .office/scripts/automation.sh \
+  .office/scripts/pending-merges.sh \
+  .office/scripts/integrate.sh \
+  .office/templates/role.SKILL.md.tmpl \
+  .gitignore
 do
   [ -f "$REPO/$f" ] && ok "generated $f" || bad "missing $f"
 done
+
+grep -qE '^\.orca/?$' "$REPO/.gitignore" \
+  && ok ".gitignore ignores .orca/" || bad ".gitignore does not ignore .orca/"
 
 # --- 3. never_writes is derived, not authored --------------------------------
 
@@ -205,7 +212,7 @@ PY
   && bad "preflight accepted backlog=tracker with no tracker config" \
   || ok "preflight refuses backlog=tracker without docs/agents/issue-tracker.md"
 
-# --- 11. check-writes gates a delivery --------------------------------------
+# --- 11. check-writes gates a delivery -------------------------------------
 
 write_config
 "$ROOT/scripts/scaffold.sh" "$REPO" >/dev/null
@@ -214,14 +221,139 @@ git -C "$REPO" commit -qm "office"
 git -C "$REPO" checkout -qb worker/role-src
 printf 'ok\n' > "$REPO/src/widget.js"
 git -C "$REPO" add -A && git -C "$REPO" commit -qm "inside write set"
-"$ROOT/scripts/check-writes.sh" role-src worker/role-src main "$REPO" >/dev/null 2>&1 \
-  && ok "check-writes accepts a delivery inside the write set" \
-  || bad "check-writes rejected a valid delivery"
+"$ROOT/scripts/check-writes.sh" role-src "$REPO" main "$REPO" >/dev/null 2>&1 \
+  && ok "check-writes accepts a committed delivery inside the write set" \
+  || bad "check-writes rejected a valid committed delivery"
 printf 'nope\n' > "$REPO/tests/sneaky.js"
 git -C "$REPO" add -A && git -C "$REPO" commit -qm "outside write set"
-"$ROOT/scripts/check-writes.sh" role-src worker/role-src main "$REPO" >/dev/null 2>&1 \
-  && bad "check-writes accepted a write outside the write set" \
-  || ok "check-writes rejects a write outside the write set"
+"$ROOT/scripts/check-writes.sh" role-src "$REPO" main "$REPO" >/dev/null 2>&1 \
+  && bad "check-writes accepted a committed write outside the write set" \
+  || ok "check-writes rejects a committed write outside the write set"
+
+# --- 12. uncommitted work is gated too --------------------------------------
+# A Worker that reports without committing is the common case; a gate that only
+# diffs the branch passes it blindly.
+
+git -C "$REPO" checkout -q main
+git -C "$REPO" checkout -qb worker/role-src-dirty
+mkdir -p "$REPO/tests"
+printf 'sneaky\n' > "$REPO/tests/uncommitted.js"
+"$ROOT/scripts/check-writes.sh" role-src "$REPO" main "$REPO" >/dev/null 2>&1 \
+  && bad "check-writes missed an uncommitted write outside the write set" \
+  || ok "check-writes rejects an uncommitted write outside the write set"
+rm -f "$REPO/tests/uncommitted.js"
+mkdir -p "$REPO/src"
+printf 'fine\n' > "$REPO/src/inside.js"
+"$ROOT/scripts/check-writes.sh" role-src "$REPO" main "$REPO" >/dev/null 2>&1 \
+  && ok "check-writes accepts an uncommitted write inside the write set" \
+  || bad "check-writes rejected a valid uncommitted delivery"
+rm -f "$REPO/src/inside.js"
+
+# --- 13. a delivery that changed nothing is not a failure -------------------
+
+"$ROOT/scripts/check-writes.sh" role-src "$REPO" main "$REPO" >/dev/null 2>&1 \
+  && ok "check-writes passes a review-only delivery with no changes" \
+  || bad "check-writes failed a no-change delivery"
+
+# --- 14. pending-merges gates the cycle on a stale base ---------------------
+
+git -C "$REPO" checkout -q main
+write_config
+"$ROOT/scripts/scaffold.sh" "$REPO" >/dev/null
+git -C "$REPO" add -A >/dev/null
+git -C "$REPO" commit -qm "office for merge tests" >/dev/null 2>&1 || true
+"$ROOT/scripts/pending-merges.sh" "$REPO" >/dev/null 2>&1 \
+  && ok "pending-merges passes a clean base" \
+  || bad "pending-merges blocked a clean base"
+
+# An empty role branch is not a delivery: nothing was committed on it.
+git -C "$REPO" branch role-src-empty
+"$ROOT/scripts/pending-merges.sh" "$REPO" >/dev/null 2>&1 \
+  && ok "pending-merges ignores a role branch with no commits" \
+  || bad "pending-merges counted an empty branch as a delivery"
+
+git -C "$REPO" checkout -qb role-src-bl001
+mkdir -p "$REPO/src"; printf 'delivered\n' > "$REPO/src/a.js"
+git -C "$REPO" add -A; git -C "$REPO" commit -qm "delivery"
+git -C "$REPO" checkout -q main
+"$ROOT/scripts/pending-merges.sh" "$REPO" >/dev/null 2>&1 \
+  && bad "pending-merges let a cycle dispatch onto a stale base" \
+  || ok "pending-merges refuses to dispatch while a delivery is unmerged"
+
+# --- 15. integrate.sh lands a delivery without touching the default branch --
+
+"$ROOT/scripts/integrate.sh" role-src role-src-bl001 "$REPO" >/dev/null 2>&1 \
+  && bad "integrate.sh ran for an office with no integration_branch" \
+  || ok "integrate.sh refuses an office that declares no integration_branch"
+
+python3 - "$REPO/office.config.json" <<'PY2'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["integration_branch"] = "office/integration"
+json.dump(cfg, open(p, "w"), indent=2)
+PY2
+main_before=$(git -C "$REPO" rev-parse main)
+"$ROOT/scripts/integrate.sh" role-src role-src-bl001 "$REPO" >/dev/null 2>&1 \
+  && ok "integrate.sh lands a gate-passed delivery" \
+  || bad "integrate.sh refused a valid delivery"
+check "$(git -C "$REPO" rev-parse main)" "$main_before" "integrate.sh leaves the default branch untouched"
+git -C "$REPO" rev-parse --verify --quiet office/integration >/dev/null \
+  && ok "integrate.sh created the integration branch" \
+  || bad "integration branch missing"
+"$ROOT/scripts/pending-merges.sh" "$REPO" >/dev/null 2>&1 \
+  && ok "pending-merges clears once the delivery landed" \
+  || bad "pending-merges still blocked after integration"
+
+# A delivery that writes outside the write set must not reach the integration branch.
+git -C "$REPO" checkout -q -b role-src-bad main
+mkdir -p "$REPO/tests"; printf 'nope\n' > "$REPO/tests/stolen.js"
+git -C "$REPO" add -A; git -C "$REPO" commit -qm "outside write set"
+git -C "$REPO" checkout -q main
+int_before=$(git -C "$REPO" rev-parse office/integration)
+"$ROOT/scripts/integrate.sh" role-src role-src-bad "$REPO" >/dev/null 2>&1 \
+  && bad "integrate.sh landed a delivery that broke the write set" \
+  || ok "integrate.sh refuses a delivery that broke the write set"
+check "$(git -C "$REPO" rev-parse office/integration)" "$int_before" "a rejected delivery leaves the integration branch untouched"
+
+python3 - "$REPO/office.config.json" <<'PY2'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["integration_branch"] = cfg.get("default_branch", "main")
+json.dump(cfg, open(p, "w"), indent=2)
+PY2
+"$ROOT/scripts/preflight.sh" "$REPO" >/dev/null 2>&1 \
+  && bad "preflight accepted integration_branch == default branch" \
+  || ok "preflight refuses integration_branch equal to the default branch"
+
+# --- 16. automation.sh refuses to guess -------------------------------------
+# The create/edit path needs a live Orca runtime and is exercised by the dry run;
+# what is testable offline is that the script never invents a schedule or a provider.
+
+write_config
+"$ROOT/scripts/scaffold.sh" "$REPO" >/dev/null
+out="$("$ROOT/scripts/automation.sh" "$REPO" 2>&1)" && rc=0 || rc=$?
+check "$rc" "0" "automation.sh exits 0 for an on-demand office"
+printf '%s' "$out" | grep -q "nothing to schedule" \
+  && ok "automation.sh schedules nothing for an on-demand office" \
+  || bad "automation.sh did not explain the on-demand case"
+
+python3 - "$REPO/office.config.json" <<'PY2'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["cadence"] = "hourly"
+json.dump(cfg, open(p, "w"), indent=2)
+PY2
+"$ROOT/scripts/preflight.sh" "$REPO" >/dev/null 2>&1 \
+  && bad "preflight accepted a scheduled office with no coordinator.agent" \
+  || ok "preflight requires coordinator.agent once the office is scheduled"
+
+rm -f "$REPO/OFFICE.md"
+"$ROOT/scripts/automation.sh" "$REPO" >/dev/null 2>&1 \
+  && bad "automation.sh ran against an unscaffolded office" \
+  || ok "automation.sh refuses to run before scaffold.sh"
 
 # --- report ------------------------------------------------------------------
 

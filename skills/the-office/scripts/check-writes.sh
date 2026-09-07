@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # check-writes.sh - reject a delivery that touched paths outside the Role's write set.
-# Usage: check-writes.sh <role-id> <ref> [base-ref] [repo-root]
-# Exit 0: every changed path is inside the write set. Exit 1: it is not, and the
-# offending paths are listed. The fix is re-dispatched to the Role that owns them.
+# Usage: check-writes.sh <role-id> <worktree-path|ref> [base-ref] [repo-root]
+#
+# Given a worktree, looks at both what the Worker committed on its branch and what it
+# left uncommitted there: a Worker that never commits is the common case, and a gate
+# that only diffs the branch passes everything. Given a ref instead, checks the
+# committed diff alone - which is all a landed delivery has.
+# Exit 0: every changed path is inside the write set. Exit 1: it is not.
 set -euo pipefail
 
-ROLE="${1:?usage: check-writes.sh <role-id> <ref> [base-ref] [repo-root]}"
-REF="${2:?usage: check-writes.sh <role-id> <ref> [base-ref] [repo-root]}"
-BASE="${3:-HEAD}"
+ROLE="${1:?usage: check-writes.sh <role-id> <worktree-path|ref> [base-ref] [repo-root]}"
+TARGET="${2:?usage: check-writes.sh <role-id> <worktree-path|ref> [base-ref] [repo-root]}"
+BASE="${3:-main}"
 REPO="${4:-$PWD}"
 CONFIG="$REPO/office.config.json"
 
@@ -23,8 +27,24 @@ while IFS= read -r w; do
   [ -n "$w" ] && WRITES+=("$w")
 done < <(jq -r --arg id "$ROLE" '.roles[] | select(.id == $id) | .writes[]' "$CONFIG")
 
-changed=$(git -C "$REPO" diff --name-only "$BASE...$REF") \
-  || fail "cannot diff $BASE...$REF"
+if [ -d "$TARGET" ]; then
+  committed=$(git -C "$TARGET" diff --name-only "$BASE...HEAD" 2>/dev/null || true)
+  # --porcelain columns 1-2 are status, 3 is a space; renames appear as "old -> new".
+  uncommitted=$(git -C "$TARGET" status --porcelain 2>/dev/null \
+    | cut -c4- | sed 's/.* -> //' || true)
+elif git -C "$REPO" rev-parse --verify --quiet "$TARGET" >/dev/null; then
+  committed=$(git -C "$REPO" diff --name-only "$BASE...$TARGET" 2>/dev/null || true)
+  uncommitted=""
+else
+  fail "not a worktree and not a ref: $TARGET"
+fi
+
+changed=$(printf '%s\n%s\n' "$committed" "$uncommitted" | sed '/^$/d' | sort -u)
+
+if [ -z "$changed" ]; then
+  printf 'check-writes: %s changed nothing. Fine for a review-only task; suspicious otherwise.\n' "$ROLE"
+  exit 0
+fi
 
 violations=""
 while IFS= read -r path; do
@@ -45,4 +65,4 @@ if [ -n "$violations" ]; then
 fi
 
 printf 'check-writes: %s stayed inside its write set (%s changed paths)\n' \
-  "$ROLE" "$(printf '%s' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')"
+  "$ROLE" "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')"

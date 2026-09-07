@@ -58,7 +58,9 @@ for dir in "$REPO/.claude/skills" "$HOME/.claude/skills"; do
   while IFS= read -r skill_md; do
     [ -n "$skill_md" ] || continue
     INVENTORY="$INVENTORY $(basename "$(dirname "$skill_md")")"
-  done < <(find "$dir" -maxdepth 2 -name SKILL.md 2>/dev/null | sort)
+  # -L follows symlinks: a skill directory symlinked into .claude/skills is a
+  # normal install pattern, and without it the skill is invisible here.
+  done < <(find -L "$dir" -maxdepth 2 -name SKILL.md 2>/dev/null | sort)
 done
 if [ -z "$INVENTORY" ]; then
   note "none found. Roles will carry no composed skills."
@@ -69,11 +71,17 @@ fi
 # --- config ------------------------------------------------------------------
 
 if [ ! -f "$CONFIG" ]; then
-  echo "office.config.json: absent - this run is an install"
+  echo "office: not installed - this run is an install"
   exit 0
 fi
 
-echo "office.config.json: present - this run is an update"
+# An office is installed once OFFICE.md exists; a config with no OFFICE.md is a
+# first scaffold, which is what step 4 of the flow looks like from here.
+if [ -f "$REPO/OFFICE.md" ]; then
+  echo "office: installed - this run is an update"
+else
+  echo "office: config written, not yet scaffolded"
+fi
 jq -e . "$CONFIG" >/dev/null 2>&1 || fail "office.config.json is not valid JSON"
 
 schema=$(jq -r '.schema_version // empty' "$CONFIG")
@@ -108,6 +116,19 @@ jq -e '(.roles | type == "array") and (.roles | length >= 1) and (.roles | lengt
 
 jq -e '.coordinator.writes | type == "array" and length >= 1' "$CONFIG" >/dev/null \
   || fail "coordinator.writes must be a non-empty array"
+
+# A scheduled Coordinator is launched by an Orca automation, which needs a provider.
+# An on-demand office has no automation, so it needs no agent.
+if [ "$cadence" != "on-demand" ]; then
+  jq -e '.coordinator.agent // empty | length > 0' "$CONFIG" >/dev/null \
+    || fail "coordinator.agent is required when cadence is not 'on-demand'"
+fi
+
+default_branch=$(jq -r '.default_branch // "main"' "$CONFIG")
+integration=$(jq -r '.integration_branch // empty' "$CONFIG")
+if [ -n "$integration" ] && [ "$integration" = "$default_branch" ]; then
+  fail "integration_branch must not be the default branch ('$default_branch'): the office would hold merge authority"
+fi
 
 # --- roles -------------------------------------------------------------------
 

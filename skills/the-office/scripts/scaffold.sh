@@ -74,6 +74,27 @@ case "$BACKLOG" in
     ;;
 esac
 
+INTEGRATION=$(jq -r '.integration_branch // empty' "$CONFIG")
+DEFAULT_BRANCH=$(jq -r '.default_branch // "main"' "$CONFIG")
+
+if [ -n "$INTEGRATION" ]; then
+  WORKER_BASE_FLAG=" --base-branch $INTEGRATION"
+else
+  WORKER_BASE_FLAG=" --base-branch $DEFAULT_BRANCH"
+fi
+
+if [ -n "$INTEGRATION" ]; then
+  MERGE_SECTION="Workers branch from \`$INTEGRATION\`, not from \`$DEFAULT_BRANCH\`. A delivery that passes the write-set gate is landed there by the Coordinator with \`.office/scripts/integrate.sh\`, so the next cycle starts from work that already exists instead of re-implementing it.
+
+A human still merges \`$INTEGRATION\` into \`$DEFAULT_BRANCH\`, once per several cycles rather than once per delivery. The Coordinator never touches \`$DEFAULT_BRANCH\`, and a delivery that conflicts with \`$INTEGRATION\` is left untouched for a human: the office does not resolve conflicts.
+
+\`.office/scripts/pending-merges.sh\` refuses to let a cycle dispatch while a delivery has not landed on \`$INTEGRATION\`."
+else
+  MERGE_SECTION="Workers branch from \`$DEFAULT_BRANCH\`, and every delivery waits for a human merge. \`.office/scripts/pending-merges.sh\` therefore refuses to let a cycle dispatch while any delivery is unmerged: a Worker branching from a stale \`$DEFAULT_BRANCH\` would re-implement work that is already sitting on a branch.
+
+This makes the office's real cadence the cadence at which you merge. To decouple the two, declare an \`integration_branch\` in \`office.config.json\`: the Coordinator then lands gate-passed deliveries there and you merge that one branch when you choose."
+fi
+
 echo "office: $OFFICE"
 
 # --- role skills -------------------------------------------------------------
@@ -155,12 +176,18 @@ fi
 office_keep="$(keep_block "$REPO/OFFICE.md")"
 office_vars=$(jq -c \
   --arg keep "$office_keep" \
+  --arg merge_section "$MERGE_SECTION" \
+  --arg worker_base_flag "$WORKER_BASE_FLAG" \
+  --arg default_branch "$DEFAULT_BRANCH" \
   --arg backlog_section "$BACKLOG_SECTION" '
   {
     OFFICE: .office,
     OFFICE_MANDATE: .mandate,
     CADENCE: .cadence,
     BACKLOG_SECTION: $backlog_section,
+    MERGE_SECTION: $merge_section,
+    WORKER_BASE_FLAG: $worker_base_flag,
+    DEFAULT_BRANCH: $default_branch,
     ROSTER_TABLE: (
       "| Role | Persona | Writes | Skills | Done |\n|---|---|---|---|---|\n"
       + ([.roles[] | "| `" + .id + "` | " + .persona
@@ -193,6 +220,20 @@ if [ "$BACKLOG" = "board" ]; then
   fi
 fi
 
+# --- .gitignore --------------------------------------------------------------
+
+# Orca creates Worker worktrees under <repo>/.orca/workspaces/. Untracked, any
+# `git add -A` by the Coordinator or a Role stages them as embedded git repos.
+if [ ! -f "$REPO/.gitignore" ] || ! grep -qE '^\.orca/?$' "$REPO/.gitignore"; then
+  if [ -s "$REPO/.gitignore" ]; then
+    printf '\n' >> "$REPO/.gitignore"
+  fi
+  printf '# Orca worktrees for this office (Worker workspaces).\n.orca/\n' >> "$REPO/.gitignore"
+  printf '  appended   .gitignore (.orca/)\n'
+else
+  printf '  ok         .gitignore already ignores .orca/\n'
+fi
+
 # --- bootstrap scripts and templates come with the repo ----------------------
 
 mkdir -p "$REPO/.office/scripts" "$REPO/.office/templates"
@@ -208,7 +249,7 @@ printf '  synced     .office/\n'
 
 if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$REPO" add -A \
-    office.config.json OFFICE.md OFFICE-LOG.md .office .claude/skills >/dev/null 2>&1 || true
+    office.config.json OFFICE.md OFFICE-LOG.md .office .claude/skills .gitignore >/dev/null 2>&1 || true
   if [ "$BACKLOG" = "board" ]; then
     git -C "$REPO" add -A BACKLOG.md >/dev/null 2>&1 || true
   fi

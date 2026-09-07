@@ -18,11 +18,26 @@ Exactly one Role writes any given path. Shared project files - manifests, lockfi
 
 {{BACKLOG_SECTION}}
 
+## Preconditions
+
+Per machine, by hand, once. Neither is checkable from a script:
+
+- **Orchestration** is an experimental feature: Settings > Experimental.
+- **Agent trust**: the agent CLI stops on its folder-trust dialog the first time it opens a path it does not trust, and the dispatch then fails with `agent_prompt_stalled` at `stage: dispatch_input` - a trust problem, not a slow agent. Trust covers nested paths, so trusting the repo root once covers the worktrees Orca creates under `.orca/workspaces/`. Do it before enabling the automation. Accepting the dialog by hand inside a Worker's terminal marks that terminal as taken over, and `worker-release` will then retain it.
+
+## Merge pressure
+
+{{MERGE_SECTION}}
+
 ## Work cycle
 
 The Coordinator is the only actor on `current`. One cycle:
 
 ```bash
+# 0. Refuse to dispatch onto a stale base. Exit 1 means deliveries are pending:
+#    report the wait, do not dispatch. An office cannot go faster than whoever merges.
+.office/scripts/pending-merges.sh
+
 # 1. Open a Run. --objective is required.
 orca orchestration run-create --objective "<what this cycle is for>" --json
 
@@ -33,17 +48,22 @@ orca orchestration task-create \
   --spec "Invoke the <role-id> skill and follow it. Task: <what to do>. Backlog item: <id>." \
   --deps '["task_x"]' --json
 
-# 3. One Worker per Task, always in its own worktree.
-orca orchestration worker-start --task <task_id> --worktree new-child --setup run --agent <agent> --json
+# 3. One Worker per Task, always in its own worktree, always from the cycle's base.
+orca orchestration worker-start --task <task_id> --worktree new-child --setup run --agent <agent>{{WORKER_BASE_FLAG}} --json
 
 # 4. Wait. Repeat until every expected Dispatch has settled.
 orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json
 
-# 5. Verify the delivery stayed inside the Role's write set.
-.office/scripts/check-writes.sh <role-id> <branch>
+# 5. Verify the delivery stayed inside the Role's write set. Pass the Worker's
+#    worktree, not just its branch: a Worker that did not commit leaves the work
+#    uncommitted there, and a gate that only diffs the branch passes everything.
+.office/scripts/check-writes.sh <role-id> <worktree-path> <base-ref>
 
 # 6. Settle the terminal.
 orca orchestration worker-release --dispatch <dispatch_id> --json
+
+# 7. Land the delivery, only if this office declares an integration branch.
+.office/scripts/integrate.sh <role-id> <delivery-branch>
 ```
 
 Rules:
@@ -52,10 +72,12 @@ Rules:
 - **Heartbeat and terminal activity mean alive, not finished.** Never close a Worker for being quiet.
 - **`worker-release` only settles a Worker that reported.** One that exits without `worker_done` reports `fallbackReason: session_not_reported`, and release then returns `retained / identity_unproven` from every caller, forever. Settle it with `orca orchestration worker-abandon --dispatch <id> --json` and leave the `residualResources` it lists to a human. Abandon stops no process.
 - **Never `--worktree current` for a Worker.** Every Role gets its own worktree, without exception.
+- **A delivery is a branch.** A Worker commits on its own branch and stops. Nothing reaches the default branch without a human.
+- **A superseded delivery branch still counts as pending.** The Coordinator neither merges nor deletes it: report it and let a human choose.
 - **A Finding does not authorise the Coordinator to edit those files.** Turn it into a backlog item and re-dispatch to the owning Role.
 - **Only the Coordinator turns Findings into backlog items.**
 - **Nested dispatch is impossible.** Workers run at depth 1 and cannot dispatch; all routing lives here. Skills invoking other skills, or Claude Code sub-agents, are not Orca dispatches and are unrestricted.
-- **Merge authority is human.** Nothing lands on `current` without a person.
+- **Merge authority is human.** Nothing reaches `{{DEFAULT_BRANCH}}` without a person.
 
 ## Supervised fallback
 
