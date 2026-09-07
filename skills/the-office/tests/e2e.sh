@@ -101,6 +101,11 @@ do
   [ -f "$REPO/$f" ] && ok "generated $f" || bad "missing $f"
 done
 
+unrendered=$(grep -rl '{{' "$REPO/OFFICE.md" "$REPO/.claude/skills/role-src/SKILL.md" "$REPO/.claude/skills/role-tests/SKILL.md" 2>/dev/null || true)
+[ -z "$unrendered" ] \
+  && ok "no unrendered placeholders in the generated files" \
+  || bad "unrendered placeholders in: $unrendered"
+
 grep -qE '^\.orca/?$' "$REPO/.gitignore" \
   && ok ".gitignore ignores .orca/" || bad ".gitignore does not ignore .orca/"
 

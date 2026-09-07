@@ -21,7 +21,7 @@ The ephemeral instance of a Role, launched for exactly one Dispatch and released
 _Avoid_: employee, dipendente, agent, process
 
 **Coordinator**:
-The single actor operating on `current`: it creates Runs and Tasks, dispatches Workers, and turns reported Findings into new backlog items. Declared in `office.config.json` with its own write set, but it is not a Role and is never dispatched.
+The single actor operating on the default branch: it creates Runs and Tasks, dispatches Workers, and turns reported Findings into new backlog items. Declared in `office.config.json` with its own write set, but it is not a Role and is never dispatched.
 _Avoid_: regional manager, orchestrator, manager
 
 **Board**:

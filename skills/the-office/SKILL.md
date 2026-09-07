@@ -1,19 +1,19 @@
 ---
 name: the-office
-description: "Install an office of Orca agents on a repo: one coordinator plus 3-5 specialised role skills that work a backlog continuously. Use when the user wants to set up multi-agent orchestration on a repo, add or remove a role from an existing office, or asks for 'the office'."
+description: "Install an office of Orca agents on a repo: a coordinator plus 3-5 role skills working a backlog. Use when the user wants multi-agent orchestration set up, wants to add or remove a role from an existing office, or asks for 'the office'."
 ---
 
 # The Office
 
 Install an **office** on a target repo: `office.config.json`, one generated role skill per Role, board files, and the bootstrap scripts that reproduce all of it.
 
-You are an **installer, not a runtime**. Run once, write files, get out of the way. If a work cycle would need you in order to run, the scaffold is wrong: the office's logic belongs in `OFFICE.md`, not in this skill.
+You are an **installer, not a runtime**. Run once, write files, get out of the way. A work cycle that would need you in order to run means the scaffold is wrong: the office's logic belongs in `OFFICE.md`.
 
-Read [SPEC.md](../../SPEC.md) for the schema and the generated tree, [CONTEXT.md](../../CONTEXT.md) for vocabulary, and `docs/adr/` for why the design is shaped this way. Vocabulary matters here: **Role** is the durable definition, **Worker** the ephemeral instance of one, and they are never used interchangeably.
+**Role** is the durable definition, **Worker** the ephemeral instance of one. Keep them apart in everything you say and write: [CONTEXT.md](../../CONTEXT.md) is the glossary, and `docs/adr/` carries why the design is shaped this way.
 
-## What you author, and what you must not
+## What you author
 
-You author **`office.config.json`** and nothing else. `scripts/scaffold.sh` is a pure function from that config to every generated file. Never hand-write a role `SKILL.md`, never hand-write `never_writes`, never put in prose what belongs in a config field. If a Role needs to know something the schema cannot express, say so and stop - do not improvise it into a template.
+`office.config.json`, and nothing else. `scripts/scaffold.sh` is a pure function from that config to every generated file, so every fact a Role needs belongs in a config field. When a Role needs something the schema cannot express, say so and stop.
 
 ## Flow
 
@@ -23,62 +23,56 @@ You author **`office.config.json`** and nothing else. `scripts/scaffold.sh` is a
 skills/the-office/scripts/preflight.sh <repo-root>
 ```
 
-It reports the environment, whether orchestration is reachable, the installed skill inventory, and whether an office already exists. If it exits non-zero, fix what it names and re-run; do not work around it.
+It reports the environment, whether orchestration is reachable, the installed skill inventory, and whether an office already exists. A non-zero exit names what to fix: fix that and re-run.
 
-If `office.config.json` exists, this run is an **update**: read the config, show the roster, ask only what changes. Adding a Role after six months is one question.
+An existing `office.config.json` makes this run an **update**: read the config, show the roster, ask only what changes. Adding a Role after six months is one question.
 
 ### 2. Mandate
 
-Ask one open question: **what does this office produce, and what does "done" mean?** Ask about cadence only if the answer does not imply it.
+Ask one open question: **what does this office produce, and what does "done" mean?** Ask about cadence only if the answer leaves it open.
 
 ### 3. Roster proposal
 
-Propose 3-5 Roles in compact blocks. For each: persona, one-sentence mandate, `reads`, `writes`, `skills`, `done`. Say what you excluded and why.
+Propose 3-5 Roles in compact blocks: persona, one-sentence mandate, `reads`, `writes`, `skills`, `done`. Say what you excluded and why. Field reference: [SPEC.md](../../SPEC.md) §3.
 
-Rules for the proposal:
-
-- Draw `skills` **only** from the inventory preflight found. Never propose a skill that is not installed.
+- Draw `skills` from the inventory preflight found, and only from there.
 - `writes` is the part that deserves discussion. Exactly one Role writes any given path.
-- Shared project files - manifests, lockfiles, migrations, CI config, changelogs - go in `coordinator.writes`, never to a Role.
-- At most one Role may hold a tracker-writing skill (`to-tickets`, `to-spec`, `triage`).
-- Show the cost of a cycle: roles x cycles/day x ~1.5-2 (re-dispatch for rework) = dispatches/day.
-- Say out loud what the cadence implies for merging. Without an `integration_branch` the cycle refuses to dispatch while any delivery is unmerged, so an `hourly` office needs an hourly merger. If the user does not want to be that, propose an `integration_branch`; if they want to hold merge authority absolutely, `on-demand` is the honest cadence. Do not set `integration_branch` silently: it lets the Coordinator merge, and that is the user's call.
+- Shared project files - manifests, lockfiles, migrations, CI config, changelogs - belong to `coordinator.writes`.
+- One Role at most holds a tracker-writing skill (`to-tickets`, `to-spec`, `triage`).
+- Price a cycle out loud: roles x cycles/day x ~1.5-2 for rework = dispatches/day.
+- Name the **merge pressure** the cadence creates. With no `integration_branch` the cycle refuses to dispatch while a delivery is unmerged, so an `hourly` office needs an hourly merger, and `on-demand` is the honest cadence for someone who wants merge authority whole. An `integration_branch` lets the Coordinator merge, so the user picks it explicitly.
 
-Take corrections in prose until the user approves. Do not write anything yet.
+Take corrections in prose. The step ends on the user's approval, and the first file is written after it.
 
 ### 4. Scaffold
-
-Only after approval. Write `office.config.json`, then:
 
 ```bash
 skills/the-office/scripts/scaffold.sh <repo-root>
 ```
 
-It aborts on any preflight failure, carries over every keep block, and never overwrites `OFFICE-LOG.md` or `BACKLOG.md`. Running it twice must change nothing; if it does, that is a bug in the scaffold, not something to paper over.
+Write `office.config.json` first. The scaffold re-runs preflight, carries over every keep block, and leaves `OFFICE-LOG.md` and `BACKLOG.md` alone once they exist. A second run must change nothing: a diff there is a bug in the scaffold.
 
 ### 5. Automation
 
-Register the Coordinator's automation, always `--disabled`. Enabling it is a human action - never enable it yourself.
+```bash
+skills/the-office/scripts/automation.sh <repo-root>
+```
+
+Registers the Coordinator's schedule, always disabled, and prints the human actions that remain. Enabling it is one of them.
 
 ### 6. Dry run
 
-Walk one cycle by hand from the Coordinator terminal, following `OFFICE.md`. The generated cycle is the only part of this design that can really fail, so do not skip this.
+Walk one cycle by hand from the Coordinator terminal, following the target repo's `OFFICE.md`. Done means: one Task dispatched, one `worker_done` waited for, `check-writes.sh` run on the delivery, and the Worker settled. The generated cycle is the only part of this design that can really fail, and this is the step that tests it.
 
-## Rules that survive the install
+## The cycle's rules
 
-These belong in `OFFICE.md` and you must not contradict them:
-
-- The Coordinator is the only actor on `current`. Every Role runs in its own worktree; `--worktree current` is never an option for a Worker.
-- A Role that reports a Finding does not authorise anyone to edit those files. The fix is re-dispatched to the owning Role.
-- `worker-release` settles a Worker that reported. A Worker that exited silently is settled with `worker-abandon`, and its residual resources are a human's problem.
-- A delivery is a branch, and a delivery that broke its write set never lands.
-- Merge authority over the default branch is human, always. An `integration_branch` moves where the Coordinator may merge, never whether a human merges.
+They live in `templates/OFFICE.md.tmpl` and reach the target repo through the scaffold, which makes it the one place to change them. Read them there before explaining a cycle, rather than reciting from memory: `check-writes.sh` gates a delivery, `pending-merges.sh` gates a cycle, `integrate.sh` lands one, and each carries a rule the dry runs earned.
 
 ## Tests
 
 ```bash
 skills/the-office/tests/e2e.sh
-shellcheck skills/the-office/scripts/*.sh
+shellcheck -e SC2016,SC2015 skills/the-office/scripts/*.sh skills/the-office/tests/e2e.sh
 ```
 
-The test suite verifies the determinism contract on a synthetic repo. It sets `OFFICE_SKIP_ORCA=1`, which exists for that purpose only - never set it when installing a real office.
+The suite verifies the determinism contract on a synthetic repo. It sets `OFFICE_SKIP_ORCA=1` to run without an Orca runtime; a real install keeps the Orca probes.
