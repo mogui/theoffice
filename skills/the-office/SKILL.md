@@ -91,7 +91,7 @@ The scaffold writes `OFFICE-INBOX.md` and appends a pointer to the target repo's
 
 - An instruction for the office is an **entry appended to `OFFICE-INBOX.md`**, in prose. The Coordinator consumes it at the intake step of the next cycle, turns it into backlog items, and answers by moving the entry's `Status`. There is no chat channel: the automation reuses the standing Coordinator session - one tab, cleared by its precheck before every cycle - and the repo is the office's memory.
 - The `CLAUDE.md` pointer is what makes any Claude Code session opened in the repo write to the inbox instead of implementing the work itself.
-- `max_tasks_per_cycle` (default 3) caps one cycle, and no cycle ever puts two Tasks on the same Role: two Workers of one Role share a write set, so the second delivery is born in conflict.
+- One Task per Role per cycle is the only cap, so a cycle's ceiling is the number of Roles: two Workers of one Role share a write set, and the second delivery is born in conflict.
 
 ### 5. Automation
 

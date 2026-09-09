@@ -37,8 +37,12 @@ fi
 [ -n "$AGENT" ] || fail "coordinator.agent is required when cadence is not 'on-demand'"
 
 # The Coordinator is the only actor on the default branch, so it runs in the repo's
-# own worktree, not a fresh one per run.
+# own worktree, not a fresh one per run, and each run is submitted to the standing
+# Coordinator session when it is still live instead of opening a new tab per cycle.
 PROMPT="Run one work cycle for the $OFFICE office.
+
+First, so the next run can start on a clean context in this same tab, record this
+session: printf '%s\\n' \"\$ORCA_TERMINAL_HANDLE\" > .office/.coordinator-terminal
 
 Read OFFICE.md at the repo root and follow it exactly: it is the whole procedure, and this
 prompt deliberately does not repeat it. Start at the intake step - consume OFFICE-INBOX.md
@@ -56,7 +60,7 @@ ARGS=(
   --provider "$AGENT"
   --workspace "path:$REPO"
   --workspace-mode existing
-  --fresh-session
+  --reuse-session
   --disabled
   --trigger "$CADENCE"
 )
@@ -64,11 +68,15 @@ if [ -n "$TIME" ]; then
   ARGS+=(--time "$TIME")
 fi
 
-# A cycle with an empty board is a wasted dispatch; a non-zero precheck records a
-# skipped run instead. With a tracker backlog there is no portable query, so no precheck.
+# The precheck runs while the reused session is still idle, which is the only moment
+# it can be cleared. A cycle with an empty board is also a wasted dispatch, so with a
+# board backlog the same precheck gates on it: a non-zero exit records a skipped run.
+# With a tracker backlog there is no portable query, so only the clear runs.
+PRECHECK="bash .office/scripts/reset-session.sh"
 if [ "$BACKLOG" = "board" ]; then
-  ARGS+=(--precheck "grep -qE '^- \[ \] ' BACKLOG.md")
+  PRECHECK="$PRECHECK && grep -qE '^- \[ \] ' BACKLOG.md"
 fi
+ARGS+=(--precheck "$PRECHECK")
 
 EXISTING=$(orca automations list --json 2>/dev/null \
   | jq -r --arg n "$NAME" '.result.automations[]? | select(.name == $n) | .id' | head -1)

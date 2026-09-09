@@ -41,7 +41,7 @@ The Coordinator starts from nothing every cycle, so the order has to be a rule r
 2. Otherwise {{BACKLOG_ORDER}}
 3. A blocked item is not dispatched until what blocks it is resolved.
 3b. **A Role with an open `block:decision` is not dispatched at all**, on any item, until a human answers it. Every commit stacked on an unanswered decision is built on a premise that may be rejected.
-4. **At most {{MAX_TASKS}} Tasks per cycle, and never two Tasks on the same Role in one cycle**: two Workers of one Role write the same write set, and the second delivery is born in conflict.
+4. **One Task per Role per cycle**, so a cycle dispatches at most as many Tasks as there are Roles: two Workers of one Role write the same write set, and the second delivery is born in conflict.
 
 Nothing dispatchable is a legitimate outcome: record it in `OFFICE-LOG.md` and close the cycle without dispatching. An empty cycle costs nothing; an invented dispatch costs a delivery to throw away.
 

@@ -78,8 +78,6 @@ case "$BACKLOG" in
     ;;
 esac
 
-MAX_TASKS=$(jq -r '.max_tasks_per_cycle // 3' "$CONFIG")
-
 # The inbox is the human input channel: the Coordinator owns it by construction, so it is
 # never authored in the config and always lands in every Role's never-writes.
 INBOX='OFFICE-INBOX.md'
@@ -246,7 +244,6 @@ office_vars=$(jq -c \
   --arg inbox "$INBOX" \
   --arg inbox_intake "$INBOX_INTAKE" \
   --arg backlog_order "$BACKLOG_ORDER" \
-  --arg max_tasks "$MAX_TASKS" \
   --arg merge_section "$MERGE_SECTION" \
   --arg review_section "$REVIEW_SECTION" \
   --arg dispatch_table "$DISPATCH_TABLE" \
@@ -259,7 +256,6 @@ office_vars=$(jq -c \
     BACKLOG_SECTION: $backlog_section,
     INBOX_INTAKE: $inbox_intake,
     BACKLOG_ORDER: $backlog_order,
-    MAX_TASKS: $max_tasks,
     MERGE_SECTION: $merge_section,
     REVIEW_SECTION: $review_section,
     DISPATCH_TABLE: $dispatch_table,
