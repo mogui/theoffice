@@ -67,6 +67,14 @@ else
   note "$(echo "$INVENTORY" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')"
 fi
 
+# Plannotator is optional: with it, the Coordinator closes an integration with a human
+# review session; without it, the review and the merge stay manual.
+if command -v plannotator >/dev/null 2>&1; then
+  note "plannotator: $(plannotator --version 2>/dev/null || echo present) - integration review is automated"
+else
+  note "plannotator: not installed - integration review and merge stay manual"
+fi
+
 # --- config ------------------------------------------------------------------
 
 if [ ! -f "$CONFIG" ]; then
@@ -84,9 +92,18 @@ fi
 jq -e . "$CONFIG" >/dev/null 2>&1 || fail "office.config.json is not valid JSON"
 
 schema=$(jq -r '.schema_version // empty' "$CONFIG")
-[ "$schema" = "1" ] || fail "unsupported schema_version: '${schema:-missing}' (expected 1)"
+case "$schema" in
+  3) ;;
+  2) fail "schema_version 2 office: review authority moved from the office to the Role. Drop 'merge_authority', give every role a 'review' block - {\"mode\": \"auto\"|\"human\", \"with\": [\"code-review\"]} - and set schema_version to 3." ;;
+  1) fail "schema_version 1 office: per-role integration branches and role names are schema 2. Give every role a 'name' and a 'title', replace 'integration_branch' with 'integration_branch_prefix' (e.g. \"integration/\"), and set schema_version to 2, then migrate to 3." ;;
+  *) fail "unsupported schema_version: '${schema:-missing}' (expected 3)" ;;
+esac
 
-for field in office mandate cadence backlog merge_authority; do
+# There is no office-wide merge authority in schema 3: each Role declares its own review.
+jq -e 'has("merge_authority")' "$CONFIG" >/dev/null \
+  && fail "merge_authority is gone in schema 3. Review authority is per Role: drop the field and give every role a 'review' block."
+
+for field in office mandate cadence backlog; do
   jq -e --arg f "$field" 'has($f) and (.[$f] != null)' "$CONFIG" >/dev/null \
     || fail "missing required field: $field"
 done
@@ -102,9 +119,6 @@ case "$backlog" in
   tracker|board) ;;
   *) fail "backlog must be tracker or board (got '$backlog')" ;;
 esac
-
-authority=$(jq -r '.merge_authority' "$CONFIG")
-[ "$authority" = "human" ] || fail "schema 1 supports merge_authority 'human' only (got '$authority')"
 
 if [ "$backlog" = "tracker" ] && [ ! -f "$REPO/docs/agents/issue-tracker.md" ]; then
   fail "backlog is 'tracker' but docs/agents/issue-tracker.md is missing. Configure a tracker, or set backlog to 'board'."
@@ -124,9 +138,16 @@ if [ "$cadence" != "on-demand" ]; then
 fi
 
 default_branch=$(jq -r '.default_branch // "main"' "$CONFIG")
-integration=$(jq -r '.integration_branch // empty' "$CONFIG")
-if [ -n "$integration" ] && [ "$integration" = "$default_branch" ]; then
-  fail "integration_branch must not be the default branch ('$default_branch'): the office would hold merge authority"
+# Every Role gets its own integration branch: <prefix><role-slug>, where the slug is the
+# role id without its `role-` prefix. One branch per Role means one review per Role, and a
+# reviewer opens a design delivery in a different frame of mind than an ops one.
+prefix=$(jq -r '.integration_branch_prefix // empty' "$CONFIG")
+if [ -n "$prefix" ]; then
+  printf '%s' "$prefix" | grep -Eq '^[a-z0-9][a-z0-9._/-]*/$' \
+    || fail "integration_branch_prefix must be a lowercase branch prefix ending in '/' (got '$prefix')"
+  case "$default_branch/" in
+    "$prefix") fail "integration_branch_prefix must not be the default branch ('$default_branch'): the office would hold merge authority" ;;
+  esac
 fi
 
 # --- roles -------------------------------------------------------------------
@@ -137,14 +158,38 @@ while IFS= read -r id; do
     *) fail "role id must match ^role-[a-z0-9-]+$ (got '$id')" ;;
   esac
   printf '%s' "$id" | grep -Eq '^role-[a-z0-9-]+$' || fail "role id must match ^role-[a-z0-9-]+$ (got '$id')"
-  for field in persona mandate reads writes skills 'done' agent; do
+  for field in name title persona mandate reads writes skills 'done' agent review; do
     jq -e --arg id "$id" --arg f "$field" \
       '.roles[] | select(.id == $id) | has($f) and (.[$f] != null)' "$CONFIG" >/dev/null \
       || fail "role $id is missing required field: $field"
   done
   jq -e --arg id "$id" '.roles[] | select(.id == $id) | .writes | length >= 1' "$CONFIG" >/dev/null \
     || fail "role $id has an empty write set"
+  # The name is what a human sees on a Worker row and what the worktree is called, so it
+  # has to survive being a branch segment and being told apart from every other Role.
+  name=$(jq -r --arg id "$id" '.roles[] | select(.id == $id) | .name' "$CONFIG")
+  printf '%s' "$name" | grep -Eq '^[A-Z][a-zA-Z]{1,15}$' \
+    || fail "role $id: name must be one capitalised word, 2-16 letters (got '$name')"
+
+  # Review authority is per Role: 'human' means a person approves that branch, 'auto' means
+  # the Coordinator gates it, has a sub-agent review it, and merges on approve.
+  mode=$(jq -r --arg id "$id" '.roles[] | select(.id == $id) | .review.mode // empty' "$CONFIG")
+  case "$mode" in
+    auto|human) ;;
+    *) fail "role $id: review.mode must be 'auto' or 'human' (got '${mode:-missing}')" ;;
+  esac
+  jq -e --arg id "$id" '.roles[] | select(.id == $id) | (.review.with | type == "array") and (.review.with | length >= 1)' "$CONFIG" >/dev/null \
+    || fail "role $id: review.with must be a non-empty array naming who reviews (a skill, or a tool on PATH)"
 done < <(jq -r '.roles[].id' "$CONFIG")
+
+dupe_names=$(jq -r '.roles[].name' "$CONFIG" | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+[ -z "$dupe_names" ] || fail "two Roles share a name ($dupe_names): names are worktree names, they must be unique"
+
+# The inbox is the human input channel and the Coordinator consumes it. A Role owning it
+# could rewrite what a human asked for, which is the one thing the channel must not allow.
+if jq -e 'any(.roles[]; any(.writes[]; . == "OFFICE-INBOX.md"))' "$CONFIG" >/dev/null; then
+  fail "no Role may write OFFICE-INBOX.md: the inbox is the Coordinator's intake, and the scaffold adds it to every Role's never-writes"
+fi
 
 dupes=$(jq -r '.roles[].id' "$CONFIG" | sort | uniq -d)
 [ -z "$dupes" ] || fail "duplicate role ids: $dupes"
@@ -164,6 +209,37 @@ while IFS= read -r entry; do
   fi
 done < <(jq -r '.roles[] | .id as $i | .skills[]? | "\($i) \(.)"' "$CONFIG")
 [ -z "$missing" ] || fail "declared skills not installed:$missing"
+
+# --- review authority ---------------------------------------------------------
+
+# Each Role names who reviews it in `review.with`. An entry resolves either to an installed
+# skill or to a tool on PATH; one name for one question, so the two never drift apart.
+# A name that resolves to neither is a hard failure here rather than a silent degrade:
+# degrading to 'human' stops the office waiting for a review nobody was told to do, and
+# degrading to 'auto' merges into the default branch with less scrutiny than was declared.
+echo "review authority"
+unresolved=""
+while IFS= read -r id; do
+  [ -n "$id" ] || continue
+  mode=$(jq -r --arg id "$id" '.roles[] | select(.id == $id) | .review.mode' "$CONFIG")
+  with=$(jq -r --arg id "$id" '.roles[] | select(.id == $id) | .review.with | join(" ")' "$CONFIG")
+  unverified=""
+  for reviewer in $with; do
+    # A Claude Code built-in - /security-review, say - lives inside the agent binary and
+    # is on no filesystem, so nothing here can check it. `builtin:` is the caller saying
+    # so out loud: the name stays unverified, but it is unverified on the record rather
+    # than by accident, which is the whole difference from a silent degrade.
+    case "$reviewer" in
+      builtin:*) unverified="$unverified ${reviewer#builtin:}"; continue ;;
+    esac
+    if skill_path "$reviewer" >/dev/null 2>&1; then continue; fi
+    command -v "$reviewer" >/dev/null 2>&1 && continue
+    unresolved="$unresolved $id:$reviewer"
+  done
+  note "$id -> $mode: $with"
+  [ -z "$unverified" ] || note "  unverified (agent built-in, not checkable from here):$unverified"
+done < <(jq -r '.roles[].id' "$CONFIG")
+[ -z "$unresolved" ] || fail "review.with names something that is neither an installed skill nor a tool on PATH:$unresolved"
 
 # The tracker is a write path: at most one Role may write to it.
 if [ "$backlog" = "tracker" ]; then

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# pending-merges.sh - report deliveries that have not landed on the cycle's base.
+# pending-merges.sh - report deliveries that have not landed on their Role's base.
 # Usage: pending-merges.sh [repo-root]
-# Exit 0: the base is current, the cycle may dispatch.
+# Exit 0: every base is current, the cycle may dispatch.
 # Exit 1: deliveries are pending. An office cannot go faster than whoever merges.
 set -euo pipefail
 
@@ -14,37 +14,48 @@ fail() { printf 'pending-merges: %s\n' "$1" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || fail "jq is not on PATH"
 
 DEFAULT_BRANCH=$(jq -r '.default_branch // "main"' "$CONFIG")
-INTEGRATION=$(jq -r '.integration_branch // empty' "$CONFIG")
+PREFIX=$(jq -r '.integration_branch_prefix // empty' "$CONFIG")
 
-# Workers branch from the integration branch when there is one; that is the whole
-# point of having one. Without it they branch from the default branch, and every
-# unmerged delivery makes the next cycle start from a staler base.
-BASE="${INTEGRATION:-$DEFAULT_BRANCH}"
-
-git -C "$REPO" rev-parse --verify --quiet "$BASE" >/dev/null \
-  || fail "base branch '$BASE' does not exist"
+git -C "$REPO" rev-parse --verify --quiet "$DEFAULT_BRANCH" >/dev/null \
+  || fail "default branch '$DEFAULT_BRANCH' does not exist"
 
 pending=""
 while IFS= read -r role; do
   [ -n "$role" ] || continue
+  name=$(jq -r --arg id "$role" '.roles[] | select(.id == $id) | .name' "$CONFIG" | tr '[:upper:]' '[:lower:]')
+
+  # Each Role has its own base: its integration branch when the office declares a prefix
+  # and the branch already exists, the default branch otherwise.
+  base="$DEFAULT_BRANCH"
+  if [ -n "$PREFIX" ]; then
+    candidate="$PREFIX${role#role-}"
+    if git -C "$REPO" rev-parse --verify --quiet "$candidate" >/dev/null; then
+      base="$candidate"
+    fi
+  fi
+
+  # A Worker's branch is named after its worktree, which the cycle names after the Role's
+  # person. Older deliveries carry the role id instead; both still count as pending.
   while IFS= read -r branch; do
     [ -n "$branch" ] || continue
-    ahead=$(git -C "$REPO" rev-list --count "$BASE..$branch" 2>/dev/null || echo 0)
+    [ "$branch" = "$base" ] && continue
+    ahead=$(git -C "$REPO" rev-list --count "$base..$branch" 2>/dev/null || echo 0)
     [ "$ahead" -gt 0 ] || continue
-    pending="$pending  $branch ($ahead commit(s) not in $BASE)"$'\n'
-  done < <(git -C "$REPO" for-each-ref --format='%(refname:short)' "refs/heads/$role*")
+    pending="$pending  $branch ($ahead commit(s) not in $base)"$'\n'
+  done < <(git -C "$REPO" for-each-ref --format='%(refname:short)' \
+             "refs/heads/$role*" "refs/heads/$name" "refs/heads/$name-*" | sort -u)
 done < <(jq -r '.roles[].id' "$CONFIG")
 
 if [ -z "$pending" ]; then
-  printf 'pending-merges: none. %s is current; the cycle may dispatch.\n' "$BASE"
+  printf 'pending-merges: none. Every Role base is current; the cycle may dispatch.\n'
   exit 0
 fi
 
-printf 'pending-merges: deliveries not landed on %s:\n%s' "$BASE" "$pending" >&2
-if [ -n "$INTEGRATION" ]; then
+printf 'pending-merges: deliveries not landed on their Role base:\n%s' "$pending" >&2
+if [ -n "$PREFIX" ]; then
   printf 'Integrate them with .office/scripts/integrate.sh before dispatching again.\n' >&2
 else
-  printf 'Do not dispatch. A Worker branching from %s would re-implement this work.\n' "$BASE" >&2
+  printf 'Do not dispatch. A Worker branching from %s would re-implement this work.\n' "$DEFAULT_BRANCH" >&2
   printf 'Merge authority is human: ask for a merge, and report the wait.\n' >&2
 fi
 exit 1

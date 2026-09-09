@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# integrate.sh - land one gate-passed delivery on the office's integration branch.
+# integrate.sh - land one gate-passed delivery on its Role's integration branch.
 # Usage: integrate.sh <role-id> <delivery-branch> [repo-root]
 #
-# Only for an office that declares integration_branch. It never touches the default
-# branch: the human still merges the integration branch, once per N cycles instead of
-# once per delivery. A conflict is left to a human, not resolved here.
+# Only for an office that declares integration_branch_prefix. Each Role has its own
+# integration branch, <prefix><role-slug>, so a human reviews one Role at a time instead
+# of one pile of mixed deliveries. It never touches the default branch: that merge is
+# review-integration.sh, and a conflict is left to a human, not resolved here.
 set -euo pipefail
 
 ROLE="${1:?usage: integrate.sh <role-id> <delivery-branch> [repo-root]}"
@@ -16,10 +17,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail() { printf 'integrate: %s\n' "$1" >&2; exit 1; }
 
 [ -f "$CONFIG" ] || fail "office.config.json not found at $REPO"
-INTEGRATION=$(jq -r '.integration_branch // empty' "$CONFIG")
+PREFIX=$(jq -r '.integration_branch_prefix // empty' "$CONFIG")
 DEFAULT_BRANCH=$(jq -r '.default_branch // "main"' "$CONFIG")
 
-[ -n "$INTEGRATION" ] || fail "this office declares no integration_branch; merge authority is human only"
+[ -n "$PREFIX" ] || fail "this office declares no integration_branch_prefix; there is no integration branch to land on"
+jq -e --arg id "$ROLE" 'any(.roles[]; .id == $id)' "$CONFIG" >/dev/null \
+  || fail "unknown role '$ROLE'"
+
+INTEGRATION="$PREFIX${ROLE#role-}"
+
 git -C "$REPO" rev-parse --verify --quiet "$BRANCH" >/dev/null \
   || fail "delivery branch '$BRANCH' does not exist"
 
@@ -28,8 +34,8 @@ if ! git -C "$REPO" rev-parse --verify --quiet "$INTEGRATION" >/dev/null; then
   printf 'integrate: created %s from %s\n' "$INTEGRATION" "$DEFAULT_BRANCH"
 fi
 
-# The gate runs against the integration branch, not the default branch: that is the
-# base this delivery is landing on.
+# The gate runs against this Role's integration branch, not the default branch: that is
+# the base this delivery is landing on.
 "$HERE/check-writes.sh" "$ROLE" "$BRANCH" "$INTEGRATION" "$REPO" \
   || fail "write-set gate rejected $BRANCH; nothing was merged"
 
@@ -44,6 +50,7 @@ git -C "$REPO" worktree add --quiet "$TMP/wt" "$INTEGRATION" \
 if git -C "$TMP/wt" merge --no-ff --no-edit -m "office: integrate $BRANCH ($ROLE)" "$BRANCH" >/dev/null 2>&1; then
   head=$(git -C "$TMP/wt" rev-parse --short HEAD)
   printf 'integrate: %s landed on %s (%s)\n' "$BRANCH" "$INTEGRATION" "$head"
+  printf 'integrate: close it with .office/scripts/review-integration.sh %s\n' "$ROLE"
 else
   git -C "$TMP/wt" merge --abort >/dev/null 2>&1 || true
   fail "$BRANCH conflicts with $INTEGRATION. Left untouched: a human resolves this, not the office."

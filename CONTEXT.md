@@ -13,12 +13,20 @@ One sentence stating what an office - or a single Role - produces, and what "don
 _Avoid_: charter, mission, goal
 
 **Role**:
-A durable job definition: one entry in `office.config.json` plus the `SKILL.md` generated from it. Roles are versioned in the repo and outlive any process.
+A durable job definition: one entry in `office.config.json` plus the `SKILL.md` generated from it. Roles are versioned in the repo and outlive any process. Exactly one of each exists, with one Person, one Desk and one integration branch.
 _Avoid_: employee, dipendente, persona, job
 
 **Worker**:
-The ephemeral instance of a Role, launched for exactly one Dispatch and released after `worker_done`. A Worker has no memory of previous Dispatches; the repo is the office's memory.
+The ephemeral instance of a Role, launched for exactly one Dispatch and released after `worker_done`. A Worker has no memory of previous Dispatches; the repo is the office's memory. It is dispatched into its Role's Desk, never into a fresh worktree.
 _Avoid_: employee, dipendente, agent, process
+
+**Desk**:
+The one durable worktree a Role works from, together with its branch and its Orca display name - all three named after the Role's person. Created once by `prepare-worktrees.sh` and reused by every Dispatch, so the app shows one standing `Jim (Platform Engineer)` row instead of a new `role-platform-09` per cycle. See [ADR 0005](./docs/adr/0005-one-desk-per-role.md).
+_Avoid_: workspace, checkout, sandbox
+
+**Person**:
+A Role's `name` plus its `title` - `Jim` + `Platform Engineer`. What a human reads on every Orca row and every branch the Role delivers on, while the role id stays the machine's key: the skill's name, the write-set gate, the stem of the integration branch.
+_Avoid_: identity, alias, handle
 
 **Coordinator**:
 The single actor operating on the default branch: it creates Runs and Tasks, dispatches Workers, and turns reported Findings into new backlog items. Declared in `office.config.json` with its own write set, but it is not a Role and is never dispatched.
@@ -27,6 +35,10 @@ _Avoid_: regional manager, orchestrator, manager
 **Board**:
 The versioned files that serve as the office's memory: `OFFICE.md`, `BACKLOG.md`, `DECISIONS.md` and `specs/`.
 _Avoid_: state, database, memory
+
+**Inbox**:
+`OFFICE-INBOX.md`: the office's only human input channel. Anyone appends an entry in prose; the Coordinator consumes it at step 0 of the cycle, turns it into backlog items, and answers by moving the entry's `Status`. Distinct from the Backlog, which is the work itself.
+_Avoid_: queue, chat, ticket, request form
 
 **Write path**:
 A directory prefix, or an exact file path, owned by exactly one Role or by the Coordinator. Shared project files (manifests, lockfiles, CI config) are Coordinator write paths.

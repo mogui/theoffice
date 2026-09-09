@@ -40,8 +40,10 @@ fi
 # own worktree, not a fresh one per run.
 PROMPT="Run one work cycle for the $OFFICE office.
 
-Read OFFICE.md at the repo root and follow its work cycle exactly: it is the whole
-procedure, and this prompt deliberately does not repeat it. You are the Coordinator.
+Read OFFICE.md at the repo root and follow it exactly: it is the whole procedure, and this
+prompt deliberately does not repeat it. Start at the intake step - consume OFFICE-INBOX.md
+into backlog items - then apply the ordering rule, then run the work cycle. You are the
+Coordinator.
 You are the only actor on the default branch. You never merge, you never edit a path
 owned by a Role, and you turn Findings into backlog items rather than fixing them.
 

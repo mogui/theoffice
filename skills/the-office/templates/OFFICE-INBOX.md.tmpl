@@ -1,0 +1,33 @@
+# Office inbox
+
+The input channel of the **{{OFFICE}}** office. Anyone - a human, or a Claude Code session
+opened in this repo - appends an entry here. The Coordinator reads it at the intake step of
+every cycle and turns it into backlog items. Only the Coordinator edits an existing entry:
+you append at the bottom and delete nothing. This file is a log.
+
+## Entry format
+
+```
+## 2026-01-31 14:30 - short title
+Status: new
+Urgent: no
+
+What I want: one sentence.
+Why: what changes for the product or for one of its users.
+Done when: the observable condition that closes the request.
+```
+
+`Status` is the Coordinator's to move: `new` -> `queued: <item ids or paths>` once the entry has
+become work, `needs-info: <question>` when it is not specified enough (answer by appending a new
+entry that cites this one, never by rewriting the old one), `closed` once the items it produced
+are resolved.
+
+`Urgent: yes` means "before anything else this cycle". It is not a way around the merge gate:
+while deliveries are unmerged the cycle does not dispatch at all - your merge unblocks the
+office, not your urgency.
+
+An entry that asks for a non-reversible decision does not become a backlog item: it comes back
+to you as a request for an ADR. The Coordinator does not invent architectural decisions.
+
+## Entries
+

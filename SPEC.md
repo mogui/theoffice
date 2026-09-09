@@ -29,15 +29,14 @@ At the repo root.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "office": "acme-api",
   "mandate": "Keep the public API documented, tested and typed; done means green suite and no undocumented endpoint.",
   "cadence": "on-demand",
   "backlog": "tracker",
   "tracker_skills": ["to-tickets", "triage"],
-  "merge_authority": "human",
   "default_branch": "main",
-  "integration_branch": "office/integration",
+  "integration_branch_prefix": "integration/",
   "commands": {
     "install": "pnpm install",
     "build": "pnpm build",
@@ -52,6 +51,8 @@ At the repo root.
   "roles": [
     {
       "id": "role-api",
+      "name": "Jim",
+      "title": "API Engineer",
       "persona": "API implementer",
       "mandate": "Implement and maintain the HTTP layer.",
       "reads": ["src/", "docs/"],
@@ -68,21 +69,26 @@ At the repo root.
 
 | Field | Required | Notes |
 |---|---|---|
-| `schema_version` | yes | Integer. `1` for this spec. |
+| `schema_version` | yes | Integer. `3` for this spec. A schema 2 config is refused with the edit it needs: drop `merge_authority`, give every Role a `review` block. A schema 1 config is refused with its own two: per-Role `name`/`title`, and `integration_branch` renamed to `integration_branch_prefix`. |
 | `office` | yes | Slug, used in generated titles. |
 | `mandate` | yes | One sentence: what the office produces and what done means. |
 | `cadence` | yes | `on-demand` \| `hourly` \| `daily`. Drives the automation trigger. |
 | `backlog` | yes | `tracker` \| `board`. See §5. |
 | `tracker_skills` | no | Names of installed skills that write to the tracker. Checked only when `backlog` is `tracker`; absent or empty disables the check. |
-| `merge_authority` | yes | Always `"human"` in schema 1. Present so a future value is a schema change, not a surprise. |
-| `default_branch` | no | Defaults to `main`. The branch only a human merges into. |
-| `integration_branch` | no | Absent, every delivery waits for a human merge. Present, the Coordinator lands gate-passed deliveries there and Workers branch from it. Must differ from `default_branch`. See §4b. |
+| `default_branch` | no | Defaults to `main`. What is allowed to reach it is decided per Role, in `roles[].review`. |
+| `integration_branch_prefix` | no | Absent, every delivery waits for a human merge. Present, each Role gets its **own** integration branch `<prefix><role-slug>`: the Coordinator lands that Role's gate-passed deliveries there and closes it the way that Role's `review` says. Lowercase, must end in `/`, must differ from `default_branch`. See §4b. |
 | `commands` | yes | Office-level `install` / `build` / `test` / `lint`. Any may be `null`. |
+| `max_tasks_per_cycle` | no | Defaults to `3`. The cap the generated ordering rule states. |
 | `coordinator.agent` | when scheduled | Passed to `automations create --provider`. Required unless `cadence` is `on-demand`, which schedules nothing. |
 | `coordinator.time` | no | `HH:MM` for the `daily` trigger. Omitted, Orca picks the preset's own time. |
 | `coordinator.writes` | yes | Board files **and** shared project files, per [ADR 0002](./docs/adr/0002-one-writer-per-path.md). |
 | `roles[]` | yes | 1-5 entries. |
-| `roles[].id` | yes | Matches `^role-[a-z0-9-]+$`. Becomes the skill directory name and the skill's `name`. |
+| `roles[].id` | yes | Matches `^role-[a-z0-9-]+$`. Becomes the skill directory name, the skill's `name`, the write-set gate's key and the stem of the Role's integration branch. |
+| `roles[].name` | yes | The Role's person: one capitalised word, 2-16 letters, unique in the office. It names the Role's standing worktree, its delivery branch and its Orca display name, so a Worker row reads `Jim (API Engineer)` instead of `role-api-09`. |
+| `roles[].title` | yes | Short job title a human would put on a badge, shown next to the name. |
+| `roles[].review` | yes | How this Role's integration branch is closed. There is no office-wide merge authority to fall back on. See §4c. |
+| `roles[].review.mode` | yes | `auto` \| `human`. `human` means a person approves that branch and nothing else merges it. `auto` means the Coordinator gates it, has a sub-agent review it, and merges on `approve`. |
+| `roles[].review.with` | yes | Non-empty, ordered. Who reviews: a skill name, a tool on `PATH`, or `builtin:<name>` for an agent built-in. Preflight resolves each entry in `.claude/skills/` then on `PATH` and **fails** when it resolves to neither; a `builtin:` entry is reported unverified instead. |
 | `roles[].persona` | yes | Short human label. |
 | `roles[].mandate` | yes | One sentence. |
 | `roles[].reads` | yes | Write paths (§4) the Role may read. Informational: reading is never restricted. |
@@ -92,6 +98,8 @@ At the repo root.
 | `roles[].done` | yes | Definition of done, in the Role's own terms. |
 | `roles[].agent` | yes | Passed to `worker-start --agent`. |
 | `roles[].model` | no | Passed to `worker-start --model` when non-null. |
+
+`OFFICE-INBOX.md` is **deliberately absent** too: the Coordinator owns the inbox by construction, so the scaffold adds it to `coordinator.writes` as rendered and to every Role's `never_writes`, and `preflight.sh` refuses a config in which a Role declares it. A Role able to rewrite the inbox could rewrite what a human asked for, which is the one thing the channel must not allow.
 
 `never_writes` is **deliberately absent**: it is derived at scaffold time as the union of every other Role's `writes` plus `coordinator.writes`. Authoring it by hand is a bug.
 
@@ -107,13 +115,36 @@ The tracker, when `backlog` is `tracker`, is itself a write path: **at most one*
 
 ## 4b. Merge pressure
 
-Deliveries are branches and merge authority is human, so unmerged work compounds: a Worker branching from a stale base re-implements what is already sitting on another branch. This is not theoretical - it appeared on the second cycle of the dry run, where a Role had to re-implement its predecessor's function because that delivery had never landed.
+Deliveries are branches, so unmerged work compounds: a Worker branching from a stale base re-implements what is already sitting on another branch. This is not theoretical - it appeared on the second cycle of the dry run, where a Role had to re-implement its predecessor's function because that delivery had never landed.
 
 Two modes, one optional field:
 
-**Without `integration_branch`** - Workers branch from `default_branch`. `pending-merges.sh` exits non-zero while any delivery is unmerged, and the cycle **does not dispatch**: it reports the wait. The office's real cadence is the cadence at which the human merges, and the scaffold makes that visible rather than letting it degrade quietly.
+**Without `integration_branch_prefix`** - Workers branch from `default_branch`. `pending-merges.sh` exits non-zero while any delivery is unmerged, and the cycle **does not dispatch**: it reports the wait. The office's real cadence is the cadence at which the human merges, and the scaffold makes that visible rather than letting it degrade quietly.
 
-**With `integration_branch`** - Workers branch from it. A delivery that passes the write-set gate is landed there by `integrate.sh`; the human merges that one branch into `default_branch` once per several cycles. The Coordinator never touches `default_branch`, and a delivery that conflicts with the integration branch is left untouched for a human: the office does not resolve conflicts.
+**With `integration_branch_prefix`** - each Role gets its own integration branch, `<prefix><role-slug>`, and its Workers branch from that one. A delivery that passes the write-set gate is landed there by `integrate.sh`. One branch per Role is one **review** per Role: an ops delivery and a design delivery are not read in the same frame of mind, and a single shared branch forced them into one diff.
+
+How an integration branch reaches `default_branch` is §4c. A branch that conflicts is left untouched either way: the office does not resolve conflicts.
+
+### 4c. Review authority, per Role
+
+Each Role declares its own in `review`. There is no office-wide setting, because the honest answer is not uniform: a pure domain package and a deploy playbook do not deserve the same gate, and one field for both means one of them is wrong.
+
+**`mode: "human"`** - `review-integration.sh <role-id>` opens a Plannotator session on that one branch. An approval is the merge and the only thing that is; feedback, a closed tab, or no Plannotator on the machine leave the branch untouched and the merge manual.
+
+**`mode: "auto"`** - three steps, and skipping one is not allowed:
+
+1. `gate.sh <role-id>` runs the office's `install`/`build`/`lint`/`test`, with that Role's own overrides, on the integration branch in a throwaway worktree. A non-zero exit **is** a `block:quality` and no reviewer is invoked: a model asked to simulate a compiler that is already installed is a wasted review.
+2. The Coordinator invokes a Claude Code **sub-agent** - not an Orca dispatch, so worker depth is not involved - on that branch alone, with the reviewers named in `review.with`, and gives it the spec, the glossary, the ADRs and the originating ticket. Without those four it can judge quality but never intent.
+3. The verdict is exactly one of:
+   - `approve` - `merge-integration.sh <role-id> "<basis>"` lands it, recording in the merge message what authorised it.
+   - `block:quality` - the code is wrong or incomplete. A `ready-for-agent` ticket carries the Findings back to that Role; the branch stays, and the Role's next Worker starts from it.
+   - `block:decision` - the code is correct but settles something the spec does not. A `needs-info` ticket carries the question to a human; the branch stays.
+
+The test that separates the two blocks: **derivable from the spec, the glossary or an existing ADR - proceed; would have to be invented - stop.** It is the intake step's test applied to a diff instead of a request.
+
+A `block:quality` blocks nothing. A `block:decision` takes its Role out of the next dispatch until a person answers: every commit stacked on an unanswered decision is built on a premise that may be rejected. That is the only place an office waits for a human.
+
+Preflight **fails** on a `review.with` entry it cannot resolve rather than degrading. Degrading to `human` stops the office waiting for a review nobody was told to do; degrading to `auto` merges with less scrutiny than was declared. Both are worse than an install that refuses to finish.
 
 In both modes a superseded delivery branch still counts as pending. The Coordinator neither merges nor deletes it - it reports it, and a human chooses.
 
@@ -127,6 +158,18 @@ One field, two branches, one template fork:
 - `board`: the backlog is `BACKLOG.md` in the repo, one item per line, `- [ ] BL-007 (role-api) title`, with optional `blocked:question` / `blocked:dep` tags. The ambiguity sink is the `blocked:question` tag. Created if absent, **never** overwritten.
 
 No script parses the backlog. It is read and written by models only.
+
+## 5b. Input channel
+
+Per [ADR 0004](./docs/adr/0004-the-inbox-is-the-input-channel.md). The backlog is what the office works; the **inbox** is how work gets there in the first place.
+
+`OFFICE-INBOX.md` is generated from a template on first scaffold and **never** overwritten afterwards. Anyone appends an entry in prose - a human, or a Claude Code session opened in the repo. Each entry carries `Status` (`new` | `queued: <ids>` | `needs-info: <question>` | `closed`) and `Urgent` (`yes` | `no`).
+
+The Coordinator consumes it at **step 0 of the cycle, before the merge gate**, so an input is never lost while deliveries are unmerged. It turns each entry into backlog items, moves the entry's `Status`, and never edits what the human wrote. An entry implying a non-reversible decision does not become a backlog item: it comes back as a request for an ADR.
+
+The scaffold also appends a marked section (`<!-- office:claude-md -->`) to the target repo's `CLAUDE.md`, creating the file if absent and recognising its own marker so a second run appends nothing. Without it a session opened in the repo implements product work itself, on paths that belong to Roles, and the next delivery is born in conflict. `CLAUDE.md` is the only file every session reads unprompted, which is why the pointer lives there and not in a skill.
+
+There is no chat channel to the Coordinator, and schema 1 does not want one: the automation opens a fresh session per cycle, so anything not in the repo is not in the office's memory.
 
 ## 6. Roles compose skills
 
@@ -144,12 +187,18 @@ Nested composition (a skill invoking another skill, or spawning Claude Code sub-
 office.config.json                    generated, overwritten
 OFFICE.md                             generated, overwritten except keep block
 OFFICE-LOG.md                         created if absent, never overwritten
+OFFICE-INBOX.md                       created if absent, never overwritten
+CLAUDE.md                             appended with a marked office pointer, once
 BACKLOG.md                            created if absent and backlog == board, never overwritten
 .gitignore                            appended with `.orca/` if missing, never rewritten
 .claude/skills/<role-id>/SKILL.md     generated, overwritten except keep block
 .office/scripts/preflight.sh          copied
 .office/scripts/scaffold.sh           copied
 .office/scripts/check-writes.sh       copied
+.office/scripts/pending-merges.sh     copied
+.office/scripts/prepare-worktrees.sh  copied
+.office/scripts/integrate.sh          copied
+.office/scripts/review-integration.sh copied
 .office/scripts/automation.sh         copied
 .office/templates/                    copied
 ```
@@ -177,9 +226,10 @@ On update, `scaffold.sh` deletes the `SKILL.md` of Roles no longer in the config
 Verified against the CLI, not transcribed from the concept:
 
 ```bash
+.office/scripts/prepare-worktrees.sh
 orca orchestration run-create --objective "<cycle objective>" --json
-orca orchestration task-create --spec "<spec naming the role skill>" --task-title "<title>" --deps '["task_x"]' --json
-orca orchestration worker-start --task <task_id> --worktree new-child --setup run --agent <agent> --json
+orca orchestration task-create --spec "<spec naming the role skill>" --task-title "<title>" --display-name "<Name> (<Title>) - <item id>" --deps '["task_x"]' --json
+orca orchestration worker-start --task <task_id> --worktree branch:<person> --agent <agent> --json
 orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 900000 --json
 orca orchestration worker-release --dispatch <dispatch_id> --json
 ```
@@ -193,12 +243,15 @@ Rules the template must carry:
 - `check --wait` emits `_keepalive` JSON on **stderr** every 15s. Filter with `jq 'select(._keepalive|not)'` when merging streams. A timeout is a checkpoint, not a failure: coding tasks run 15-60 minutes, so repeat the check.
 - Heartbeat and terminal activity mean alive, not finished. Never close a Worker for being quiet.
 - `worker-release` for settled Workers. A Worker that exits without reporting (`fallbackReason: session_not_reported`) can **never** be cleared by release - it returns `retained / identity_unproven` from any caller. Settle it with `worker-abandon` and leave its `residualResources` to a human. See [ADR 0003](./docs/adr/0003-automation-drives-the-coordinator.md).
-- Every Role always runs in its own worktree. `--worktree current` is not an option.
+- **One standing worktree per Role, reused every cycle.** `prepare-worktrees.sh` creates the Role's integration branch, its worktree and its Orca label - all named after its person - and fast-forwards the worktree onto the integration branch when it is clean. A Worker is then started with `--worktree branch:<person>` and no creation flags: `--name`, `--base-branch`, `--display-name` and `--setup` are rejected for an existing worktree. A dirty or unlanded desk is reported and not dispatched. `--worktree current` is never an option: that is the Coordinator's own checkout.
+- **A Worker row carries a person, not an id.** `Jim (API Engineer)` on the worktree, `Jim (API Engineer) - BL-012` on the Task. `role-api-09` told a reviewer nothing, and the numbering only ever counted how many times the office had run.
 - After each accepted `worker_done`, run `check-writes.sh <role-id> <worktree-path> <base-ref>`: paths outside the Role's write set reject the delivery, and the fix is re-dispatched to the Role that owns them. It reads both the branch diff and the worktree's uncommitted changes, because a Worker that reports without committing is the common case and a branch-only gate passes it blindly.
-- **A delivery is a branch.** The Role template tells the Worker to commit on its own branch and stop; merge authority is human.
+- **A delivery is a branch.** The Role template tells the Worker to commit on its own branch and stop. What happens to that branch afterwards is §4c's business, never a Worker's.
 - A Role reporting Findings does not authorise the Coordinator to edit those files.
 - A Role that must read another's work in progress reads it from that worktree or the pushed branch. Nothing is visible on `current` until it lands.
 - Merge authority is human.
+- **Step 0 is intake, and it runs before the merge gate**: consume `OFFICE-INBOX.md` into backlog items even when `pending-merges.sh` will refuse the cycle. Losing an input to a blocked cycle is worse than a cycle that dispatches nothing.
+- **The order is a rule, not a judgement.** The Coordinator starts from nothing every cycle, so the template states the order: urgent inbox entries first, then one effort at a time (the group holding the oldest open item, lowest number inside it), blocked items skipped, at most `max_tasks_per_cycle` Tasks and never two on the same Role. "Nothing dispatchable" is a legitimate outcome to record in `OFFICE-LOG.md`.
 - Unresolvable ambiguity never blocks the cycle: the item is parked in the backlog (§5) and the cycle continues. Local, reversible ambiguity may be resolved and recorded instead.
 
 ## 10. Coordinator driver
@@ -216,7 +269,7 @@ An Orca automation, per [ADR 0003](./docs/adr/0003-automation-drives-the-coordin
 | `--precheck` | `grep -qE '^- \[ \] ' BACKLOG.md`, only when `backlog` is `board` | A non-zero precheck records a skipped run instead of burning a cycle on an empty board. A tracker backlog has no portable query, so it gets no precheck. |
 | `--disabled` | always | Enabling an unattended office is a human decision. |
 
-The prompt deliberately does not restate the cycle: it points at `OFFICE.md`. An automation prompt that carried the procedure would be a second copy to keep in sync, and the office's logic belongs in the repo.
+The prompt names the intake step and the ordering rule by name and then points at `OFFICE.md` for both: a Coordinator that skipped intake would leave the office deaf. It deliberately does not restate the cycle. An automation prompt that carried the procedure would be a second copy to keep in sync, and the office's logic belongs in the repo.
 
 ## 11. Skill layout
 
@@ -245,8 +298,11 @@ skills/the-office/tests/e2e.sh
 8. `check-writes.sh` gates committed changes, uncommitted changes, and a no-change delivery.
 9. `.orca/` is ignored, so Worker worktrees cannot be staged as embedded repos.
 10. `pending-merges.sh` passes a clean base, ignores a role branch with no commits, and refuses to dispatch while a delivery is unmerged.
-11. `integrate.sh` refuses an office with no `integration_branch`, lands a gate-passed delivery, leaves `default_branch` untouched, and refuses a delivery that broke its write set without moving the integration branch.
+11. `integrate.sh` refuses an office with no `integration_branch_prefix`, lands a gate-passed delivery on that Role's own integration branch, creates no branch for a Role that delivered nothing, leaves `default_branch` untouched, and refuses a delivery that broke its write set without moving the integration branch.
+11b. `preflight.sh` refuses a schema 1 config, a prefix that does not end in `/`, a prefix equal to `default_branch`, and two Roles sharing a name.
 12. `automation.sh` schedules nothing for an on-demand office and refuses to run before `scaffold.sh`.
+13. `OFFICE-INBOX.md` is generated, survives regeneration, and lands in every Role's `never_writes` without being authored; `preflight.sh` refuses a Role that declares it.
+14. The `CLAUDE.md` pointer is appended exactly once across repeated scaffolds.
 
 `preflight.sh` honours `OFFICE_SKIP_ORCA=1` to skip every Orca probe. It exists so the suite runs on a machine with no Orca runtime; never set it when installing a real office.
 
@@ -258,9 +314,8 @@ skills/the-office/tests/e2e.sh
 4. `pending-merges.sh` and `integrate.sh` - done, and the second cycle's deliveries were landed on an integration branch with the suite green.
 5. Dry run on this repo: the office implementing itself.
 
-## 14. Out of scope for schema 1
+## 14. Out of scope for schema 3
 
-- Any `merge_authority` other than `human`.
 - Nested worker depth 2. The design must not depend on it.
 - Roles writing `.claude/skills/**`. Only the installer writes role skills.
 - Exporting Runs, Tasks or Dispatches. Portability is: repo via git, automations recreated by `automation.sh`, experimental settings by hand.

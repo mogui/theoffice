@@ -64,7 +64,7 @@ OFFICE.md                             how this office works. The Coordinator's i
 OFFICE-LOG.md                         the Coordinator's diary. Created once, never overwritten
 BACKLOG.md                            only when backlog = board. Created once, never overwritten
 .claude/skills/<role-id>/SKILL.md      one per Role. Only the installer writes these
-.office/scripts/                       the six scripts, so the office is reproducible from the repo
+.office/scripts/                       the scripts, so the office is reproducible from the repo
 .office/templates/                     the templates, for the same reason
 .gitignore                             gains `.orca/`, so Worker worktrees are not staged as embedded repos
 ```
@@ -75,15 +75,14 @@ Regeneration is safe: everything between `<!-- office:keep -->` and `<!-- /offic
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "office": "acme-api",
   "mandate": "Keep the public API documented, tested and typed; done means a green suite and no undocumented endpoint.",
   "cadence": "daily",
   "backlog": "tracker",
   "tracker_skills": ["to-tickets", "triage"],
-  "merge_authority": "human",
   "default_branch": "main",
-  "integration_branch": "office/integration",
+  "integration_branch_prefix": "integration/",
   "commands": { "install": "pnpm install", "build": "pnpm build", "test": "pnpm test", "lint": "pnpm lint" },
   "coordinator": {
     "agent": "claude",
@@ -93,6 +92,8 @@ Regeneration is safe: everything between `<!-- office:keep -->` and `<!-- /offic
   "roles": [
     {
       "id": "role-api",
+      "name": "Jim",
+      "title": "API Engineer",
       "persona": "API implementer",
       "mandate": "Implement and maintain the HTTP layer.",
       "reads": ["src/", "docs/"],
@@ -107,7 +108,9 @@ Regeneration is safe: everything between `<!-- office:keep -->` and `<!-- /offic
 }
 ```
 
-Full field reference in [SPEC.md §3](./SPEC.md). The three things worth knowing up front:
+Full field reference in [SPEC.md §3](./SPEC.md). The four things worth knowing up front:
+
+**A Role is a person.** `name` and `title` are required, and the pair names the Role's worktree, its delivery branch and its Orca display name: the app shows `Jim (API Engineer)` where a per-cycle worktree used to show `role-api-09`. The id keeps every machine job - the skill's name, the write-set gate, the stem of the integration branch.
 
 **`never_writes` is deliberately absent.** It is derived at scaffold time as the union of every other Role's `writes` plus the Coordinator's. Writing it by hand is a bug.
 
@@ -127,20 +130,27 @@ The Coordinator is the only actor on the default branch. `OFFICE.md` carries the
 
 - **A `check --wait` timeout is a checkpoint, not a failure.** Coding tasks run 15-60 minutes. Repeat the check. Heartbeat and terminal activity mean alive, not finished: never close a Worker for being quiet.
 - **`worker-release` only settles a Worker that reported.** One that exits silently can never be cleared by release - it returns `retained / identity_unproven` from any caller, forever. Settle it with `worker-abandon` and leave the residual resources it lists to a human.
-- **Every Role always gets its own worktree.** `--worktree current` is never an option for a Worker.
+- **Every Role has one standing worktree, reused every cycle.** `prepare-worktrees.sh` creates the desk once - worktree, branch and Orca label, all named after the Role's person - and levels it with the Role's integration branch before each dispatch. A Worker goes in with `--worktree branch:<person>` and no creation flags. A second worktree for one Role is two branches over one write set; `--worktree current` is never an option either.
 - **A delivery is a branch.** A Worker commits on its own branch and stops. After each accepted `worker_done`, `check-writes.sh` verifies the delivery stayed inside the Role's write set - reading both the branch diff and the worktree's uncommitted changes, because a Worker that reports without committing is the common case.
 - **A Finding does not authorise anyone to edit those files.** It becomes a backlog item, and the fix is re-dispatched to the Role that owns the path.
 - **Ambiguity never blocks the cycle.** The item is parked (`needs-info` on a tracker, `blocked:question` on a board) and the cycle moves on.
 
 ## Merge pressure
 
-Deliveries are branches and merge authority is human, so unmerged work compounds: a Worker branching from a stale base re-implements what is already sitting on another branch. Two modes, one optional field.
+Deliveries are branches, so unmerged work compounds: a Worker branching from a stale base re-implements what is already sitting on another branch. Two modes, one optional field.
 
-**Without `integration_branch`** - `pending-merges.sh` refuses to let a cycle dispatch while any delivery is unmerged. Your office's real cadence is the cadence at which you merge, and the scaffold makes that visible instead of letting it degrade quietly.
+**Without `integration_branch_prefix`** - `pending-merges.sh` refuses to let a cycle dispatch while any delivery is unmerged. Your office's real cadence is the cadence at which you merge, and the scaffold makes that visible instead of letting it degrade quietly.
 
-**With `integration_branch`** - Workers branch from it, and a delivery that passes the write-set gate is landed there by `integrate.sh`. You merge that one branch into the default branch when you choose, once per several cycles. The Coordinator never touches the default branch, and a conflict is left untouched for a human: the office does not resolve conflicts.
+**With `integration_branch_prefix`** - every Role gets its own integration branch, `integration/api`, `integration/design`, `integration/ops`, and a delivery that passes the write-set gate is landed on its Role's by `integrate.sh`. One branch per Role is one review per Role: you read an ops delivery on its own, in the frame of mind ops asks for, instead of finding it inside one pile with three other Roles.
 
-Pick the first if merge authority matters more than throughput. Do not set `integration_branch` without deciding: it moves where the Coordinator may merge.
+How that branch reaches the default branch is each Role's own setting, `review`, and the roster table shows it:
+
+- **`human`** - `review-integration.sh <role-id>` opens a Plannotator session on that one branch and merges **only** on an explicit approval. Your merge authority, in a UI instead of a shell. Without Plannotator the script says so and the review and merge stay manual.
+- **`auto`** - `gate.sh` builds and tests the branch, a Claude Code sub-agent reviews it with the reviewers you named, and `merge-integration.sh` lands it on `approve`. The office stops only where a **product or intent decision** is missing: a reviewer that finds one returns `block:decision`, which takes that Role out of the next dispatch until you answer. A `block:quality` blocks nothing and comes back as a ticket.
+
+Every cycle closes with a fixed summary in `OFFICE-LOG.md` - one prose line per merged branch, saying what the product does now that it did not before, and every open decision relisted until you answer it. That summary is where you catch drift, so it is written in product language and not in shas.
+
+Set both deliberately. `integration_branch_prefix` decides whether the Coordinator may merge at all; `review` decides, Role by Role, whether it may do so without you.
 
 ## Scheduling
 
@@ -167,7 +177,7 @@ skills/the-office/tests/e2e.sh
 shellcheck -e SC2016,SC2015 skills/the-office/scripts/*.sh skills/the-office/tests/e2e.sh
 ```
 
-49 assertions on a synthetic repo. The invariant worth testing by machine is determinism: a second `scaffold.sh` run must be byte-identical, keep blocks must survive, and the board files must not be touched. The suite sets `OFFICE_SKIP_ORCA=1` so it runs without an Orca runtime; never set that when installing a real office.
+59 assertions on a synthetic repo. The invariant worth testing by machine is determinism: a second `scaffold.sh` run must be byte-identical, keep blocks must survive, and the board files must not be touched. The suite sets `OFFICE_SKIP_ORCA=1` so it runs without an Orca runtime; never set that when installing a real office.
 
 ## When something goes wrong
 
